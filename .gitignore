@@ -1,0 +1,23 @@
+# Other generated files
+gmon.out
+*.oc
+*.oc_out
+.merlin
+_build/
+
+# Backup files
+*~
+\#*
+
+# Directories
+tmp/
+wiki/
+
+# Others
+log
+*.log
+*.gz
+*.png
+*.svg
+*.dot
+*.smt2

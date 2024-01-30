@@ -1,0 +1,14 @@
+opam-version: "2.0"
+name: "z3-cex"
+authors: [
+  "Sato, Ryosuke <rsato@acm.org>"
+]
+maintainer: ["Sato, Ryosuke <rsato@acm.org>"]
+
+depends: [
+  "dune" {>= "2.9"}
+  "batteries" {>= "3.0.0"}
+  "ocamlfind"
+  "smtlib-utils" {>= "0.3.1"}
+  "z3"
+]
