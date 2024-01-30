@@ -1,0 +1,6 @@
+(executable
+ (name main)
+ (public_name z3-cex)
+ (libraries str unix batteries smtlib-utils z3-cex)
+ (flags
+  (:standard -w -21-32-9-52-57-58 -warn-error -a)))

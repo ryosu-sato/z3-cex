@@ -1,7 +1,7 @@
+open Z3_cex
 open Util
 module Print = CHC.Print
 module SMTLIB = Smtlib_utils.V_2_6
-module Ast = SMTLIB.Ast
 
 module Dbg = Debug.Make (struct
   let check = Debug.make_check __MODULE__

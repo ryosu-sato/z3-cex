@@ -1,5 +1,5 @@
-(executable
- (name main)
+(library
+ (name z3_cex)
  (public_name z3-cex)
  (libraries str unix batteries smtlib-utils z3)
  (flags
