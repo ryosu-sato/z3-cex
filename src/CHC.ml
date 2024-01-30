@@ -12,15 +12,15 @@ and counterexample = (int * (term * int list)) list
 type solver = Z3 | Eldarica
 
 type chc = CHC of rule list
-and echc = E_CHC of env * rule list (* Outermost existensial *)
 
-and ehchc =
-  | EH_CHC of env * rule list (* Outermost existensial with disjunctive heads *)
+(** Outermost existensial *)
+and echc = E_CHC of env * rule list
 
-and dhchc =
-  | DH_CHC of
-      env
-      * rule list (* Outermost existensial with disjunctive/existential heads *)
+(** Outermost existensial with disjunctive heads *)
+and ehchc = EH_CHC of env * rule list
+
+(** Outermost existensial with disjunctive/existential heads *)
+and dhchc = DH_CHC of env * rule list
 
 and rule = { env : env; head : head; body : term list }
 
@@ -70,43 +70,6 @@ let pp_cex fm (cex : counterexample) =
       ns
   in
   print_list pr "@\n" fm cex
-
-let parse_cex_eld s =
-  let aux s0 =
-    try
-      let n, s1 = String.split s0 ~by:": " in
-      let n = int_of_string n in
-      let s2, ns =
-        try String.split s1 ~by:" -> " with
-        | Not_found -> (s1, "")
-        | _ -> assert false
-      in
-      let ns =
-        match String.split_on_string ns ~by:", " with
-        | [ "" ] -> []
-        | ss -> List.map int_of_string ss
-      in
-      let p =
-        if s2 = "FALSE" then Ast.False
-        else
-          match String.split ~by:"(" s2 with
-          | exception Not_found -> Ast.Const s2
-          | f, args ->
-              assert (String.last args = ')');
-              let args =
-                args |> String.rchop
-                |> String.split_on_string ~by:", "
-                |> List.map
-                     SMTLIB.(
-                       fun s ->
-                         Parser.parse_term Lexer.token (Lexing.from_string s))
-              in
-              Ast.App (f, args)
-      in
-      Some (n, (p, ns))
-    with _ -> None
-  in
-  s |> String.split_on_char '\n' |> List.filter_map aux
 
 let make_genv stmts =
   List.L.filter_map stmts ~f:(fun stmt ->
@@ -164,41 +127,6 @@ let predicates_of (CHC rules) =
 type env = Env of (var * (term * env)) list
 type unsat_proof = (int * (term * int list)) list
 
-let construct_proof_tree t =
-  let counter = ref 0 in
-  let cache = ref [] in
-  let rec loop (Env env) (t : term) : int * unsat_proof =
-    match t with
-    | Const x ->
-        let t, env' = List.assoc x env in
-        loop env' t
-    | Let (defs, t1) ->
-        let env' =
-          Env (List.map (Pair.map_snd (Pair.pair -$- Env env)) defs @@@ env)
-        in
-        loop env' t1
-    | App ("_hyper-res_", ts) ->
-        let ts', head = List.decomp_snoc @@ List.tl ts in
-        if List.mem_assoc head !cache then (List.assoc head !cache, [])
-        else
-          let i = !counter in
-          incr counter;
-          let indices, proofss = List.split_map (loop (Env env)) ts' in
-          cache := (head, i) :: !cache;
-          (i, (i, (head, indices)) :: List.flatten proofss)
-    | App ("mp", [ t1; Imply (goal, False); False ]) ->
-        let i, proofs = loop (Env env) t1 in
-        ( i,
-          List.map
-            (fun (i, (t, indices)) ->
-              if t = goal then (i, (Ast.False, indices)) else (i, (t, indices)))
-            proofs )
-    | _ ->
-        Format.printf "%a@." Print.term t;
-        assert false
-  in
-  snd @@ loop (Env []) t
-
 let copy_rule fv ({ env } as rule) =
   let fv' = List.rev_map_append fst env fv in
   let xs = gen_freshs fv' @@ List.map fst env in
@@ -215,8 +143,10 @@ let decomp_body env ts =
 let unify_rule fv target rule =
   let open Option in
   let { head; body; env } = copy_rule fv rule in
-  (* Format.printf "[unify_rule] rule: %a@." pp_rules [rule]; *)
-  (* Format.printf "[unify_rule] copied: %a@." pp_rules [{head;body;env}]; *)
+  if false then Format.printf "[unify_rule] target: %a@." Print.term target;
+  if false then Format.printf "[unify_rule] rule: %a@." pp_rules [ rule ];
+  if false then
+    Format.printf "[unify_rule] copied: %a@.@." pp_rules [ { head; body; env } ];
   let* map = unify_term (term_of_head head) target in
   let map = List.map (Pair.map_fst var_of) map in
   let env = List.filter_out (fst |- List.mem_assoc -$- map) env in
@@ -264,116 +194,6 @@ let find preds (CHC rules) i i_next target =
   | None -> assert false
   | Some cex -> cex
 
-let parse_cex_z3 s =
-  (* let ss = String.split_on_char '\n' s in *)
-  (* List.iteri (Format.printf "%d: %s@.") ss; *)
-  let s =
-    Str.global_replace (Str.regexp "(_ hyper-res[^)]*)") "_hyper-res_" s
-  in
-  let proof =
-    SMTLIB.Parser.parse_term SMTLIB.Lexer.token (Lexing.from_string s)
-  in
-  (* let tr = make_trans (fun tr t -> match t with App("hyper-res", ts) -> Some (App("hyper-res", Const "_"::List.tl (List.map tr ts)))| _ -> None) in *)
-  let remove_asserted =
-    make_trans (fun tr t ->
-        match t with App ("asserted", [ t1 ]) -> Some (tr t1) | _ -> None)
-  in
-  let t = Ast_util.remove_attributes (remove_asserted proof) in
-  (* Format.printf "t: %a@." Print.term t; *)
-  let proof = construct_proof_tree t in
-  (* Format.printf "cex: %a@." Print.term t; *)
-  (* Format.printf "proof: %a@.@." Print.(list (int * (term * list int))) proof; *)
-  proof
-
-let reconstruct_counterexample_z3 context (CHC rules) cex =
-  let postfix = "!" in
-  let rename p = p ^ postfix in
-  let renamed = String.ends_with -$- postfix in
-  let preds =
-    List.filter_map
-      (function
-        | { Ast.stmt = Stmt_decl { fun_name; fun_ret } } when fun_ret = Ty_bool
-          ->
-            Some fun_name
-        | _ -> None)
-      context
-  in
-  let aux (i', cache, acc) (_, (target, indices)) =
-    (* Format.printf "target: %a@." Print.term target; *)
-    match List.assoc target cache with
-    | exception Not_found ->
-        (* Format.printf "Not_found@.@."; *)
-        (i', cache, acc)
-    | i ->
-        (* Format.printf "i: %d@." i; *)
-        let ts = List.map (fun i -> List.assoc i cex |> fst) indices in
-        (* Format.printf "FIND: %a -> %a@." Print.(list term) ts Print.term target; *)
-        let map_inv, rules' =
-          let preds =
-            List.filter_map
-              (function _, (Ast.App (f, _), _) -> Some f | _ -> None)
-              cex
-          in
-          assert (not (List.exists renamed preds));
-          let map = List.map (Pair.add_right rename) preds in
-          let rules' =
-            List.map
-              (fun rule ->
-                { rule with body = List.map (rename_map map) rule.body })
-              rules
-          in
-          let new_rules =
-            List.L.map ts ~f:(fun t ->
-                let f, args = try decomp_app t with _ -> (var_of t, []) in
-                let xs = gen_freshs preds @@ List.map (Fun.const "arg") args in
-                let env = List.map2 (fun x v -> (x, ty_of_value v)) xs args in
-                let head = App (rename f, List.map Ast.const xs) in
-                let body = List.map2 (fun x v -> Ast.(var x = v)) xs args in
-                { env; head; body })
-          in
-          (* Format.printf "rules': %a@." pp_chc (CHC rules'); *)
-          (* Format.printf "new_rules: %a@." pp_chc (CHC new_rules); *)
-          (List.map Pair.swap map, new_rules @@@ rules')
-        in
-        let cex = find preds (CHC rules') i i' target in
-        let cex1, cex2 =
-          List.partition
-            (Exception.default false
-               (snd |- fst |- decomp_app |- fst |- renamed))
-            cex
-        in
-        (* Format.printf "i: %d@." i; *)
-        (* Format.printf "i': %d@." i'; *)
-        (* Format.printf "@[cex1: %a@]" pp_cex cex1; *)
-        (* Format.printf "@[cex2: %a@." pp_cex cex2; *)
-        let acc = cex2 @@@ acc in
-        ( i' + List.length cex,
-          List.map (fun (i, (t, _)) -> (rename_map map_inv t, i)) cex1 @@@ cache,
-          acc )
-  in
-  let _, cache, cex = List.fold_left aux (1, [ (Ast.False, 0) ], []) cex in
-  let map =
-    let make xs =
-      let x, xs' = List.find_decomp (List.mem_assoc -$- cex) xs in
-      List.map (Pair.pair -$- x) xs'
-    in
-    cache
-    |> List.classify ~eq:(Compare.eq_on fst)
-    |> List.map (List.map snd)
-    |> List.filter (List.length |- ( <= ) 2)
-    |> List.map (List.sort compare)
-    |> List.flatten_map make
-  in
-  (* Format.printf "map: %a@.@." Print.(list (int * int)) map; *)
-  let cex =
-    List.map
-      (Pair.map_snd
-         (Pair.map_snd (List.map (List.assoc_default_id ~eq:( = ) -$- map))))
-      cex
-  in
-  (* Format.printf "cex: %a@.@." Print.(list (int * (term * list int))) cex; *)
-  List.sort compare cex
-
 let dhchc_of_statements stmts =
   let genv = make_genv stmts in
   let xs, stmts = decomp_exists_stmts stmts in
@@ -384,13 +204,17 @@ let dhchc_of_statements stmts =
          | stmt -> Left stmt)
   in
   let context =
-    Format.printf {|(warning "ignore after (check-sat)")@.|};
     let ctx1, ctx2 =
       List.takedrop_while
         (function { Ast.stmt = Stmt_check_sat } -> false | _ -> true)
         context
     in
-    ctx1 @ [ List.hd ctx2 ]
+    match ctx2 with
+    | [] -> ctx1
+    | ch :: ctx2' ->
+        if ctx2' <> [] then
+          Format.printf {|(warning "ignore after (check-sat)")@.|};
+        ctx1 @ [ ch ]
   in
   let rules =
     asserts
@@ -537,8 +361,6 @@ let ehchc_of_dhchc genv context (DH_CHC (env, rules)) =
   let context' = insert_decls_before_first_decl (decl_of_env f_env) context in
   (genv', context', EH_CHC (env, rules))
 
-exception Clause_not_found
-
 let args_of_head (t : term) =
   match t with
   | False -> []
@@ -553,31 +375,48 @@ let insert_rules rules context =
   let asserts = List.map statement_of_rule rules in
   insert_assert_before_check_sat asserts context
 
-let add_cex_context stmt =
-  let open Ast in
-  [
-    _mk (Stmt_set_option [ ":produce-proofs"; "true" ]);
-    _mk (Stmt_set_option [ ":pp.pretty_proof"; "true" ]);
-  ]
-  @ stmt
-  @ [ _mk Stmt_get_proof; _mk Stmt_exit ]
+let normalize_head_args_rule genv ({ env; head; body } as rule) =
+  match head with
+  | Bottom -> rule
+  | App (f, ts) ->
+      let open Either in
+      let gen =
+        gen_fresh (List.map fst (genv @@@ env)) -| Format.sprintf "x%d"
+      in
+      let tys, _ = decomp_ty_arrow @@ List.assoc f genv in
+      let ts' =
+        List.map2i
+          (fun i t ty ->
+            match t with
+            | Ast.Const x when is_var x -> Left t
+            | _ -> Right (gen i, ty, t))
+          ts tys
+      in
+      let constr =
+        ts'
+        |> List.filter_map (function
+             | Left _ -> None
+             | Right (x, _, t) -> Some Ast.(var x = t))
+      in
+      let head =
+        let args =
+          List.map (function Left t -> t | Right (x, _, _) -> Ast.var x) ts'
+        in
+        App (f, args)
+      in
+      let body = constr @@@ body in
+      let env =
+        List.filter_map
+          (function Left _ -> None | Right (x, ty, _) -> Some (x, ty))
+          ts'
+        @@@ env
+      in
+      { env; head; body }
+  | Exists (_, _) -> assert false
+  | Disj _ -> assert false
 
-let solve ?(args = [||]) context (CHC rules) =
-  let stmts = insert_rules rules context |> add_cex_context in
-  let option = Array.to_list args |> String.join " " in
-  Dbg.printf "@[[solve_chc] stmts@\n  %a@]" Print.stmts stmts;
-  let@ cin, fmt = Command.open_z3 ~option () in
-  Format.fprintf fmt "%a@." Print.stmts stmts;
-  if false then Format.printf "%a@." Print.stmts stmts;
-  match input_line cin with
-  | "sat" -> `Sat ()
-  | "unsat" ->
-      let cex = parse_cex_z3 (IO.input_all cin) in
-      let cex = reconstruct_counterexample_z3 context (CHC rules) cex in
-      `Unsat cex
-  | s ->
-      Format.eprintf "%s@." s;
-      assert false
+let normalize_head_args genv (CHC rules) =
+  CHC (List.map (normalize_head_args_rule genv) rules)
 
 module Print = struct
   include Print

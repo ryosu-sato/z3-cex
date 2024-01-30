@@ -266,12 +266,14 @@ let check_fv loc genv env t =
     Format.printf "[check_fv] fv': %a@." Print_.(list string) fv';
     assert false)
 
+let decomp_ty_arrow = function
+  | Ast.Ty_arrow (tys, ty') -> (tys, ty')
+  | ty -> ([], ty)
+
 let decl_of_env env =
   env
   |> List.map (fun (f, ty) ->
-         let tys, ty' =
-           match ty with Ast.Ty_arrow (tys, ty') -> (tys, ty') | _ -> ([], ty)
-         in
+         let tys, ty' = decomp_ty_arrow ty in
          Ast.decl_fun ~tyvars:[] f tys ty')
 
 let insert_assert_before_check_sat asserts context =

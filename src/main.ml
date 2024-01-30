@@ -11,9 +11,9 @@ let main filename args =
   let stmts = SMTLIB.parse_file_exn filename in
   let genv, context, dhchc = CHC.dhchc_of_statements stmts in
   let genv, context, ehchc = CHC.ehchc_of_dhchc genv context dhchc in
-  let _, E_CHC (env, rules) = CHC.echc_of_ehchc genv ehchc in
+  let genv, E_CHC (env, rules) = CHC.echc_of_ehchc genv ehchc in
   assert (env = []);
-  match CHC.solve ~args context (CHC rules) with
+  match CHC_solver.solve ~args genv context (CHC rules) with
   | `Sat _ -> `Sat
   | `Unsat cex -> `Unsat cex
 
