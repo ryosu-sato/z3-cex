@@ -1,9 +1,12 @@
 opam-version: "2.0"
 name: "z3-cex"
+synopsis: "Printing counterexample by z3"
 authors: [
   "Sato, Ryosuke <rsato@acm.org>"
 ]
 maintainer: ["Sato, Ryosuke <rsato@acm.org>"]
+homepage: ["https://github.com/ryosu-sato/z3-cex"]
+bug-reports: ["https://github.com/ryosu-sato/z3-cex/issues"]
 
 depends: [
   "dune" {>= "2.9"}
