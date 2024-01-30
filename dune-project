@@ -6,6 +6,7 @@
 
 (package
  (name z3-cex)
+ (version 1.0)
  (synopsis "Printing counterexample by z3")
  (depends
   (dune (>= 1.0.2))
